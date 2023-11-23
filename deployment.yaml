@@ -16,6 +16,14 @@ spec:
       containers:
       - name: gtfs-validator
         image: gcr.io/$PROJECT_ID/$IMAGE_GTFS_VALIDATOR:$GITHUB_SHA
+        volumeMounts:
+              - name: gtfs-validator-volume
+                mountPath: /app/config.yaml
+                subPath: config.yaml
+        volumes:
+        - name: gtfs-validator-volume
+          configMap:
+            name: streamlit-authentication-database
       restartPolicy: Always
 ---
 # Service
