@@ -20,10 +20,10 @@ spec:
               - name: gtfs-validator-volume
                 mountPath: /app/config.yaml
                 subPath: config.yaml
-        volumes:
-        - name: gtfs-validator-volume
-          configMap:
-            name: streamlit-authentication-database
+      volumes:
+      - name: gtfs-validator-volume
+        configMap:
+          name: streamlit-authentication-database
       restartPolicy: Always
 ---
 # Service
