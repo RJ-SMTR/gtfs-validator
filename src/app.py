@@ -3,6 +3,20 @@ import filecmp
 import re
 import pandas as pd
 from datetime import timedelta
+import streamlit_authenticator as stauth
+import yaml
+from yaml.loader import SafeLoader
+
+with open('config.yaml') as file:
+    config = yaml.load(file, Loader=SafeLoader)
+
+authenticator = stauth.Authenticate(
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days'],
+    config['preauthorized']
+)
 
 # TODO: Add an authenticator
 # TODO: Add button to upload file to GCS
@@ -136,4 +150,12 @@ def main():
                     st.table(tb.style.format("{:.3f}"))
     
 if __name__ == "__main__":
-    main()
+    authenticator.login('Login', 'main')
+    if st.session_state["authentication_status"]:
+        authenticator.logout('Logout', 'main', key='unique_key')
+        st.write(f'Bem vinda(o) *{st.session_state["name"]}*!')
+        main()
+    elif st.session_state["authentication_status"] is False:
+        st.error('Usuário ou senha incorreta')
+    elif st.session_state["authentication_status"] is None:
+        st.warning('Por favor insira seu nome de usuário e senha')
