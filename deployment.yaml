@@ -54,7 +54,7 @@ metadata:
     nginx.ingress.kubernetes.io/rewrite-target: /
     cert-manager.io/issuer: "letsencrypt-production"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-max-temp-file-size: "200m"
+    nginx.ingress.kubernetes.io/proxy-body-size: 200m
 spec:
   tls:
     - hosts:
