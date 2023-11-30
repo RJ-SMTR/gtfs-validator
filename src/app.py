@@ -1,11 +1,16 @@
 import streamlit as st
+import json
 import hvac
 import re
 import pandas as pd
 import os
+import pytz
 import streamlit_authenticator as stauth
 
-from datetime import timedelta
+from datetime import datetime, timedelta
+from io import BytesIO
+from google.cloud import storage
+from google.oauth2 import service_account
 
 client = hvac.Client(
     url=os.getenv('VAULT_URL'),
@@ -170,6 +175,22 @@ def main():
                     tb.loc["Total"] = tb.sum()
                     st.table(tb.style.format("{:.3f}"))
 
+                    if st.button('Enviar', type="primary"):
+                        now = datetime.now(pytz.timezone('America/Sao_Paulo'))
+                        today_str = now.strftime('%Y-%m-%d')
+                        now_str = now.isoformat()
+                        json_acct_info = json.loads(os.getenv('STORAGE_CREDENTIALS'), strict=False)
+                        credentials = service_account.Credentials.from_service_account_info(
+                            json_acct_info)
+                        storage_client = storage.Client(credentials=credentials, project='rj-smtr')
+                        bucket = storage_client.bucket('gtfs-validator-files')
+                        blob_os = bucket.blob(f'data={today_str}/os-{st.session_state["username"]}-{now_str}.csv')
+                        blob_gtfs = bucket.blob(f'data={today_str}/gtfs-{st.session_state["username"]}-{now_str}.zip')
+                        stringio_os = BytesIO(os_file.getvalue())
+                        stringio_gtfs = BytesIO(gtfs_file.getvalue())
+                        blob_os.upload_from_file(stringio_os)
+                        blob_gtfs.upload_from_file(stringio_gtfs)
+                        st.write('Enviado')
 
 if __name__ == "__main__":
     authenticator.login('Login', 'main')
