@@ -17,16 +17,21 @@ spec:
       - name: gtfs-validator
         image: gcr.io/$PROJECT_ID/$IMAGE_GTFS_VALIDATOR:$GITHUB_SHA
         env:
-          - name: VAULT_URL
+          - name: STORAGE_CREDENTIALS
             valueFrom:
               secretKeyRef:
                 name: envs
-                key: VAULT_URL
+                key: STORAGE_CREDENTIALS
           - name: VAULT_TOKEN
             valueFrom:
               secretKeyRef:
                 name: envs
                 key: VAULT_TOKEN
+          - name: VAULT_URL
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: VAULT_URL
       restartPolicy: Always
 ---
 # Service

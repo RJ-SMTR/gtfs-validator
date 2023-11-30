@@ -1,3 +1,5 @@
 streamlit==1.28.2
 streamlit-authenticator==0.2.3
 hvac==2.0.0
+pytz==2023.3.post1
+google-cloud-storage==2.13.0
