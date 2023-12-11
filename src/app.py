@@ -8,15 +8,18 @@ import pytz
 import streamlit_authenticator as stauth
 
 from datetime import datetime, timedelta
-from io import BytesIO
+from io import BytesIO, StringIO
 from google.cloud import storage
 from google.oauth2 import service_account
+from zipfile import ZipFile, ZIP_DEFLATED
+
+st.set_page_config(page_title="Validador do GTFS", page_icon='./favicon.ico')
 
 client = hvac.Client(
     url=os.getenv('VAULT_URL'),
     token=os.getenv('VAULT_TOKEN'),
 )
-config = client.secrets.kv.read_secret_version('gtfs-validator')['data']['data']
+config = client.secrets.kv.read_secret_version('gtfs-validator', raise_on_deleted_version=True)['data']['data']
 
 authenticator = stauth.Authenticate(
     config['credentials'],
@@ -56,8 +59,19 @@ os_columns = [
 ]
 
 
+def os_sheets(os_file):
+    df = pd.read_excel(os_file, None)
+    return len(df.keys())
+
+def check_os_filetype(os_file):
+    try:
+        pd.read_excel(os_file)
+        return True
+    except ValueError:
+        return False
+
 def check_os_filename(os_file):
-    pattern = re.compile(r'^os_\d{4}-\d{2}-\d{2}.csv$')
+    pattern = re.compile(r'^os_\d{4}-\d{2}-\d{2}.xlsx$')
     return bool(pattern.match(os_file.name))
 
 
@@ -76,121 +90,185 @@ def check_gtfs_filename(gtfs_file):
     return bool(pattern.match(gtfs_file.name))
 
 
+def change_feed_info_dates(file: bytes, os_initial_date: datetime, os_final_date: datetime) -> bytes:
+
+    # Descompacta o arquivo zip direto na memoria
+    input_zip = ZipFile(BytesIO(file), 'r')
+    files: dict[str, bytes] = {name: input_zip.read(name) for name in input_zip.namelist()}
+
+    # Transforma os bytes em arquivo
+    file_text = str(files['feed_info.txt'],'utf-8')    
+    string_buffer = StringIO(file_text) 
+
+    # Muda a data
+    df = pd.read_csv(string_buffer)
+    df['feed_start_date'] = os_initial_date.strftime('%Y%m%d')
+    df['feed_end_date'] = os_final_date.strftime('%Y%m%d')
+
+    # Transforma o dataframe em csv na memoria
+    string_buffer = StringIO() 
+    df.to_csv(string_buffer, index=False, lineterminator='\r\n')
+    
+    files['feed_info.txt'] = bytes(string_buffer.getvalue(), encoding='utf8')
+
+    # Compacta o arquivo novamente
+    zip_buffer = BytesIO()
+    with ZipFile(zip_buffer, "w", ZIP_DEFLATED, False) as zip_file:
+        for file_name, file_data in files.items():
+            zip_file.writestr(file_name, BytesIO(file_data).getvalue())
+
+    return zip_buffer
+
+
+def upload_to_gcs(file_name: str, file_data: BytesIO) -> None:
+    json_acct_info = json.loads(os.getenv('STORAGE_CREDENTIALS'), strict=False)
+    credentials = service_account.Credentials.from_service_account_info(
+        json_acct_info)
+    storage_client = storage.Client(credentials=credentials, project='rj-smtr')
+    bucket = storage_client.bucket('gtfs-validator-files')
+    blob = bucket.blob(file_name)
+    blob.upload_from_file(file_data)
+
 def main():
     st.title(":pencil: Validação GTFS e OS")
     st.caption("Envie ambos os arquivos para iniciar o processo de validação. Ao final, se tudo estiver correto, você pode confirmar para subir os dados no data lake!")
 
-    os_file = st.file_uploader("Insira o arquivo OS:", type=["csv"])
+    os_file = st.file_uploader("Insira o arquivo OS:", type=["xlsx"])
     gtfs_file = st.file_uploader("Insira o arquivo GTFS:", type=["zip"])
 
     # Check OS and GTFS files
     if os_file and gtfs_file:
-
         if not check_os_filename(os_file):
             st.warning(
                 ":warning: O nome do arquivo OS não está no formato esperado!")
+            return
+        elif not check_os_filetype(os_file):
+            st.warning(
+                ":warning: O nome do arquivo OS não é do tipo correto! Transforme o arquivo no formato .xlsx do Excel.")
+            return
+        st.success(
+            ":white_check_mark: O nome do arquivo OS está no formato esperada!")
+
+
+        os_sheets = pd.read_excel(os_file, None)
+        if len(os_sheets) == 1:
+            os_df = os_sheets.popitem()[1]
         else:
-            st.success(
-                ":white_check_mark: O nome do arquivo OS está no formato esperada!")
+            st.warning(
+                "O arquivo possui mais de uma aba, selecione a aba que contém os dados")
+            options = ['Selecione a aba'] + list(os_sheets)
+            actual_sheet = st.selectbox('Selecione a aba', options)
+            if actual_sheet == 'Selecione a aba':
+                return
+            os_df = os_sheets[actual_sheet]
 
-            os_df = pd.read_csv(os_file)
+        viagens_cols = ["Viagens Dia Útil", "Viagens Sábado",
+                        "Viagens Domingo", "Viagens Ponto Facultativo"]
+        km_cols = ["Quilometragem Dia Útil", "Quilometragem Sábado",
+                    "Quilometragem Domingo", "Quilometragem Ponto Facultativo"]
 
-            viagens_cols = ["Viagens Dia Útil", "Viagens Sábado",
-                            "Viagens Domingo", "Viagens Ponto Facultativo"]
-            km_cols = ["Quilometragem Dia Útil", "Quilometragem Sábado",
-                       "Quilometragem Domingo", "Quilometragem Ponto Facultativo"]
 
-            for col in viagens_cols + km_cols:
-                os_df[col] = (
-                    os_df[col]
-                    .str.strip()
-                    .str.replace("—", "0")
-                    .str.replace(".", "")
-                    .str.replace(",", ".")
-                    .astype(float)
-                )
+        if not check_os_columns(os_df):
+            st.warning(
+                ":warning: O arquivo OS não contém as colunas esperadas!")
+            return
 
-            if not check_os_columns(os_df):
-                st.warning(
-                    ":warning: O arquivo OS não contém as colunas esperadas!")
+        # print(os_df.dtypes)
+        for col in viagens_cols + km_cols:
+            os_df[col] = (
+                os_df[col].astype(str)
+                .str.strip()
+                .str.replace("—", "0")
+                # .str.replace(".", "")
+                .str.replace(",", ".")
+                .astype(float)
+                .fillna(0)
+                
+            )
+            print(os_df)
+            os_df[col] = os_df[col].astype(float)
+        
+        
 
-            else:
-                st.success(
-                    ":white_check_mark: O arquivo OS contém as colunas esperadas!")
+        st.success(
+            ":white_check_mark: O arquivo OS contém as colunas esperadas!")
 
-                if not check_os_columns_order(os_df):
-                    st.warning(
-                        f":warning: O arquivo OS contém as colunas esperadas, porém não segue a ordem esperada: {os_columns}")
+        if not check_os_columns_order(os_df):
+            st.warning(
+                f":warning: O arquivo OS contém as colunas esperadas, porém não segue a ordem esperada: {os_columns}")
 
-                # Check dates
-                st.subheader("Confirme por favor os itens abaixo:")
+        # Check dates
+        st.subheader("Confirme por favor os itens abaixo:")
 
-                os_initial_date = pd.to_datetime(
-                    os_file.name.split('_')[1].split(".")[0])
-                check_initial_date = st.radio(
-                    f"A data **inicial** de vigência da OS é **{os_initial_date.strftime('%d/%m/%Y')}**?",
-                    ["Não", "Sim"],
-                    index=None
-                )
+        os_initial_date = pd.to_datetime(
+            os_file.name.split('_')[1].split(".")[0])
+        check_initial_date = st.radio(
+            f"A data **inicial** de vigência da OS é **{os_initial_date.strftime('%d/%m/%Y')}**?",
+            ["Não", "Sim"],
+            index=None
+        )
 
-                os_final_date = os_initial_date + timedelta(days=15)
-                check_final_date = st.radio(
-                    f"A data **final** de vigência da OS é **{os_final_date.strftime('%d/%m/%Y')}**?",
-                    ["Não", "Sim"],
-                    index=None
-                )
+        os_final_date = os_initial_date + timedelta(days=15)
+        check_final_date = st.radio(
+            f"A data **final** de vigência da OS é **{os_final_date.strftime('%d/%m/%Y')}**?",
+            ["Não", "Sim"],
+            index=None
+        )
 
-                if check_final_date == "Não":
-                    os_final_date = st.date_input(
-                        "Qual deve ser a data final de vigência da OS?", value=None)
-                    if os_final_date:
-                        check_final_date = "Sim"
+        if check_final_date == "Não":
+            os_final_date = st.date_input(
+                "Qual deve ser a data final de vigência da OS?", value=None)
+            if os_final_date:
+                check_final_date = "Sim"
 
-                if check_initial_date == "Não":
-                    st.warning(
-                        "Verifique o arquivo enviado e tente novamente!")
+        if check_initial_date == "Não":
+            st.warning(
+                "Verifique o arquivo enviado e tente novamente!")
 
-                # Check data
-                if check_final_date == "Sim" and check_initial_date == "Sim":
-                    st.subheader(
-                        ":face_with_monocle: Ótimo! Verifique os dados antes de subir:")
+        # Check data
+        if check_final_date == "Sim" and check_initial_date == "Sim":
+            st.subheader(
+                ":face_with_monocle: Ótimo! Verifique os dados antes de subir:")
 
-                    # TODO: Partidas x Extensão, Serviços OS x GTFS (routes, trips, shapes), Extensão OS x GTFS"
+            # TODO: Partidas x Extensão, Serviços OS x GTFS (routes, trips, shapes), Extensão OS x GTFS"
 
-                    # Numero de servicos por consorcio
-                    tb = pd.DataFrame(os_df.groupby(
-                        "Consórcio")["Serviço"].count())
-                    tb.loc["Total"] = tb.sum()
-                    st.table(tb)
+            # Numero de servicos por consorcio
+            tb = pd.DataFrame(os_df.groupby(
+                "Consórcio")["Serviço"].count())
+            tb.loc["Total"] = tb.sum()
+            st.table(tb)
 
-                    # Numero de viagens por consorcio
-                    tb = pd.DataFrame(os_df.groupby(
-                        "Consórcio")[viagens_cols].sum())
-                    tb.loc["Total"] = tb.sum()
-                    st.table(tb.style.format("{:.1f}"))
+            # Numero de viagens por consorcio
+            tb = pd.DataFrame(os_df.groupby(
+                "Consórcio")[viagens_cols].sum())
+            tb.loc["Total"] = tb.sum()
+            st.table(tb.style.format("{:.1f}"))
 
-                    # Numero de KM por consorcio
-                    tb = pd.DataFrame(os_df.groupby(
-                        "Consórcio")[km_cols].sum())
-                    tb.loc["Total"] = tb.sum()
-                    st.table(tb.style.format("{:.3f}"))
+            # Numero de KM por consorcio
+            tb = pd.DataFrame(os_df.groupby(
+                "Consórcio")[km_cols].sum())
+            tb.loc["Total"] = tb.sum()
+            st.table(tb.style.format("{:.3f}"))
 
-                    if st.button('Enviar', type="primary"):
-                        now = datetime.now(pytz.timezone('America/Sao_Paulo'))
-                        today_str = now.strftime('%Y-%m-%d')
-                        now_str = now.isoformat()
-                        json_acct_info = json.loads(os.getenv('STORAGE_CREDENTIALS'), strict=False)
-                        credentials = service_account.Credentials.from_service_account_info(
-                            json_acct_info)
-                        storage_client = storage.Client(credentials=credentials, project='rj-smtr')
-                        bucket = storage_client.bucket('gtfs-validator-files')
-                        blob_os = bucket.blob(f'data={today_str}/os-{st.session_state["username"]}-{now_str}.csv')
-                        blob_gtfs = bucket.blob(f'data={today_str}/gtfs-{st.session_state["username"]}-{now_str}.zip')
-                        stringio_os = BytesIO(os_file.getvalue())
-                        stringio_gtfs = BytesIO(gtfs_file.getvalue())
-                        blob_os.upload_from_file(stringio_os)
-                        blob_gtfs.upload_from_file(stringio_gtfs)
-                        st.write('Enviado')
+            if st.button('Enviar', type="primary"):
+                now = datetime.now(pytz.timezone('America/Sao_Paulo'))
+                today_str = now.strftime('%Y-%m-%d')
+                now_str = now.isoformat()
+
+                # Gera um .csv direto na memoria
+                string_buffer = StringIO() 
+                os_df.to_csv(string_buffer, index=False, sep=',')
+                string_buffer = bytes(string_buffer.getvalue(), encoding='utf8')
+                os_filename = f'data={today_str}/os-{st.session_state["username"]}-{now_str}.csv'
+                stringio_os = BytesIO(string_buffer)
+                upload_to_gcs(os_filename, stringio_os)
+
+                gtfs_filename = f'data={today_str}/gtfs-{st.session_state["username"]}-{now_str}.zip'
+                stringio_gtfs = change_feed_info_dates(gtfs_file.getvalue(), os_initial_date, os_final_date)
+                stringio_gtfs = BytesIO(stringio_gtfs.getvalue())
+                upload_to_gcs(gtfs_filename, stringio_gtfs)
+
+                st.write('Enviado')
 
 if __name__ == "__main__":
     authenticator.login('Login', 'main')
