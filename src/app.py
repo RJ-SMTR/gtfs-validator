@@ -136,8 +136,13 @@ def main():
     # Check OS and GTFS files
     if os_file and gtfs_file:
 
-
+        if not check_os_filetype(os_file):
+            st.warning(
+                ":warning: O nome do arquivo OS não é do tipo correto! Transforme o arquivo no formato .xlsx do Excel.")
+            return
+        
         os_sheets = pd.read_excel(os_file, None)
+
         if len(os_sheets) == 1:
             os_df = os_sheets.popitem()[1]
         else:
@@ -160,21 +165,17 @@ def main():
                 ":warning: O arquivo OS não contém as colunas esperadas!")
             return
 
-        # print(os_df.dtypes)
         for col in viagens_cols + km_cols:
             os_df[col] = (
                 os_df[col].astype(str)
                 .str.strip()
                 .str.replace("—", "0")
-                # .str.replace(".", "")
                 .str.replace(",", ".")
                 .astype(float)
                 .fillna(0)
                 
             )
             os_df[col] = os_df[col].astype(float)
-        
-        
 
         st.success(
             ":white_check_mark: O arquivo OS contém as colunas esperadas!")
@@ -210,18 +211,19 @@ def main():
                 )
 
                 os_delay_description = st.text_input(
-                    "Adicione uma observação para explicar o motivo:",
-                    index=None
+                    "Adicione uma observação para explicar o motivo:"
                 )
-                if (os_delay_choice is not None) and (os_delay_description is not None):
+                if (os_delay_choice is not None) and os_delay_description:
                     os_check_initial = True
             else:
                 os_check_initial = True
             
-            if os_check_initial is True:
-                # Check data
-                st.subheader(
-                    ":face_with_monocle: Ótimo! Verifique os dados antes de subir:")
+            if not os_check_initial:
+                return
+            
+            # Check data
+            st.subheader(
+                ":face_with_monocle: Ótimo! Verifique os dados antes de subir:")
 
             # TODO: Partidas x Extensão, Serviços OS x GTFS (routes, trips, shapes), Extensão OS x GTFS"
 
