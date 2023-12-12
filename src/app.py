@@ -29,9 +29,6 @@ authenticator = stauth.Authenticate(
     config['preauthorized']
 )
 
-# TODO: Add an authenticator
-# TODO: Add button to upload file to GCS
-
 os_columns = [
     "Serviço",
     "Vista",
@@ -138,16 +135,6 @@ def main():
 
     # Check OS and GTFS files
     if os_file and gtfs_file:
-        if not check_os_filename(os_file):
-            st.warning(
-                ":warning: O nome do arquivo OS não está no formato esperado!")
-            return
-        elif not check_os_filetype(os_file):
-            st.warning(
-                ":warning: O nome do arquivo OS não é do tipo correto! Transforme o arquivo no formato .xlsx do Excel.")
-            return
-        st.success(
-            ":white_check_mark: O nome do arquivo OS está no formato esperada!")
 
 
         os_sheets = pd.read_excel(os_file, None)
@@ -185,7 +172,6 @@ def main():
                 .fillna(0)
                 
             )
-            print(os_df)
             os_df[col] = os_df[col].astype(float)
         
         
@@ -200,35 +186,42 @@ def main():
         # Check dates
         st.subheader("Confirme por favor os itens abaixo:")
 
-        os_initial_date = pd.to_datetime(
-            os_file.name.split('_')[1].split(".")[0])
-        check_initial_date = st.radio(
-            f"A data **inicial** de vigência da OS é **{os_initial_date.strftime('%d/%m/%Y')}**?",
-            ["Não", "Sim"],
-            index=None
+        os_initial_date = st.date_input(
+            "Qual a data **inicial** de vigência da OS?", value=None
         )
 
-        os_final_date = os_initial_date + timedelta(days=15)
-        check_final_date = st.radio(
-            f"A data **final** de vigência da OS é **{os_final_date.strftime('%d/%m/%Y')}**?",
-            ["Não", "Sim"],
-            index=None
+        os_final_date = st.date_input(
+            "Qual a data **final** de vigência da OS?", value=None
         )
 
-        if check_final_date == "Não":
-            os_final_date = st.date_input(
-                "Qual deve ser a data final de vigência da OS?", value=None)
-            if os_final_date:
-                check_final_date = "Sim"
+        if (os_initial_date is not None) and (os_final_date is not None):
+            
+            os_check_initial = False
 
-        if check_initial_date == "Não":
-            st.warning(
-                "Verifique o arquivo enviado e tente novamente!")
+            if os_initial_date > datetime.now().date():
+                st.warning(
+                    ":warning: ATENÇÃO: Você está subindo uma OS cuja operação já começou! Prossiga se é isso mesmo, senão revise as datas escolhidas."
+                )
 
-        # Check data
-        if check_final_date == "Sim" and check_initial_date == "Sim":
-            st.subheader(
-                ":face_with_monocle: Ótimo! Verifique os dados antes de subir:")
+                os_delay_choice = st.radio(
+                    "Escolha o motivo para o atraso da OS:",
+                    ["Retificação", "Correção"],
+                    index=None
+                )
+
+                os_delay_description = st.text_input(
+                    "Adicione uma observação para explicar o motivo:",
+                    index=None
+                )
+                if (os_delay_choice is not None) and (os_delay_description is not None):
+                    os_check_initial = True
+            else:
+                os_check_initial = True
+            
+            if os_check_initial is True:
+                # Check data
+                st.subheader(
+                    ":face_with_monocle: Ótimo! Verifique os dados antes de subir:")
 
             # TODO: Partidas x Extensão, Serviços OS x GTFS (routes, trips, shapes), Extensão OS x GTFS"
 
