@@ -138,7 +138,7 @@ def main():
 
         if not check_os_filetype(os_file):
             st.warning(
-                ":warning: O nome do arquivo OS não é do tipo correto! Transforme o arquivo no formato .xlsx do Excel.")
+                ":warning: O arquivo OS não é do tipo correto! Transforme o arquivo no formato .xlsx do Excel.")
             return
         
         os_sheets = pd.read_excel(os_file, None)
@@ -188,38 +188,36 @@ def main():
         st.subheader("Confirme por favor os itens abaixo:")
 
         os_initial_date = st.date_input(
-            "Qual a data **inicial** de vigência da OS?", value=None
+            "Qual a data **inicial** de vigência da OS?", value=None, format="DD/MM/YYYY"
         )
 
         os_final_date = st.date_input(
-            "Qual a data **final** de vigência da OS?", value=None
+            "Qual a data **final** de vigência da OS?", value=None, format="DD/MM/YYYY"
         )
 
-        if (os_initial_date is not None) and (os_final_date is not None):
-            
-            os_check_initial = False
+        if os_initial_date and os_final_date:
+            if os_initial_date > os_final_date:
+                st.warning(
+                    ":warning: ATENÇÃO: A data inicial escolhida é posterior a data final. Revise as datas e tente novamente."
+                )
+                return
 
-            if os_initial_date > datetime.now().date():
+            if (datetime.now().date() > os_initial_date):
                 st.warning(
                     ":warning: ATENÇÃO: Você está subindo uma OS cuja operação já começou! Prossiga se é isso mesmo, senão revise as datas escolhidas."
                 )
 
-                os_delay_choice = st.radio(
-                    "Escolha o motivo para o atraso da OS:",
-                    ["Retificação", "Correção"],
-                    index=None
-                )
+        os_type = st.radio(
+            "Escolha o tipo da OS:",
+            ["Regular", "Extraordinária - Retificação", "Extraordinária - Correção", "Extraordinária - Verão"],
+            index=None
+        )
 
-                os_delay_description = st.text_input(
-                    "Adicione uma observação para explicar o motivo:"
-                )
-                if (os_delay_choice is not None) and os_delay_description:
-                    os_check_initial = True
-            else:
-                os_check_initial = True
-            
-            if not os_check_initial:
-                return
+        os_description = st.text_input(
+            "Adicione uma breve descrição da OS:"
+        )
+
+        if os_initial_date and os_final_date and os_type and os_description:
             
             # Check data
             st.subheader(
