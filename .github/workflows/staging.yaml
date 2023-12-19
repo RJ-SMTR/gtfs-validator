@@ -62,6 +62,6 @@ jobs:
     # Deploy the Docker image to the GKE cluster
     - name: Deploy
       run: |-
-        envsubst < ./k8s/deployment.yaml > deployment.yml
+        envsubst < ./k8s/deployment_staging.yaml > deployment.yml
         kubectl apply -n gtfs-validator-staging -f deployment.yml
         kubectl get services -n gtfs-validator-staging -o wide

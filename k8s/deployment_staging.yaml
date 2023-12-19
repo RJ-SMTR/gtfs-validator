@@ -63,10 +63,10 @@ metadata:
 spec:
   tls:
     - hosts:
-        - gtfs-validator-staging.mobilidade.rio
+        - staging.gtfs-validator.mobilidade.rio
       secretName: gtfs-validator-staging-tls
   rules:
-    - host: gtfs-validator-staging.mobilidade.rio
+    - host: staging.gtfs-validator.mobilidade.rio
       http:
         paths:
           - path: /
