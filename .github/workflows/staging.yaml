@@ -3,13 +3,13 @@ name: Build and Deploy to GKE
 on:
   push:
     branches:
-      - main
+      - staging
 
 env:
   PROJECT_ID: ${{ secrets.GKE_PROJECT }}
   GKE_CLUSTER: ${{ secrets.GKE_CLUSTER }}
   GKE_ZONE: ${{ secrets.GKE_ZONE }}   # Add your cluster zone here.
-  IMAGE_GTFS_VALIDATOR: gtfs-validator
+  IMAGE_GTFS_VALIDATOR: gtfs-validator-staging
 
 jobs:
   setup-build-publish-deploy:
@@ -63,5 +63,5 @@ jobs:
     - name: Deploy
       run: |-
         envsubst < ./k8s/deployment.yaml > deployment.yml
-        kubectl apply -n gtfs-validator -f deployment.yml
-        kubectl get services -n gtfs-validator -o wide
+        kubectl apply -n gtfs-validator-staging -f deployment.yml
+        kubectl get services -n gtfs-validator-staging -o wide
