@@ -104,6 +104,14 @@ def get_shapes(shapes: pd.DataFrame) -> pd.DataFrame:
         shapes_final = pd.concat([shapes_final, aux])
     return shapes_final
 
+
+def get_df_from_zip(file: bytes, filename: str) -> pd.DataFrame:
+    # Descompacta o arquivo zip direto na memoria
+    input_zip = ZipFile(BytesIO(file), 'r')
+    files: dict[str, bytes] = {name: input_zip.read(name) for name in input_zip.namelist()}
+    df = read_stream(files[filename])
+    return df
+
 def get_trips(file: bytes) -> pd.DataFrame:
 
     # Descompacta o arquivo zip direto na memoria
@@ -236,19 +244,70 @@ def check_os_filetype(os_file):
     except ValueError:
         return False
 
+def check_gtfs_trip_absence(os_df: pd.DataFrame, trips: pd.DataFrame) -> list[dict]:
+    day_type = {
+        "Partidas Ida Dia Útil": ('U_REG', 0),
+        "Partidas Volta Dia Útil": ('U_REG', 1),
+        "Partidas Ida Sábado": ('S_REG', 0),
+        "Partidas Volta Sábado": ('S_REG', 1),
+        "Partidas Ida Domingo": ('D_REG', 0),
+        "Partidas Volta Domingo": ('D_REG', 1)
+    }
+    os_df = os_df[['Serviço', "Partidas Ida Dia Útil",
+    "Partidas Volta Dia Útil",
+              "Partidas Ida Sábado",
+    "Partidas Volta Sábado",
+              "Partidas Ida Domingo",
+    "Partidas Volta Domingo"]]
+    errors = []
+    for _, service in os_df.iterrows():        
+        for column in os_df.columns:
+
+            if column == 'Serviço':
+                continue
+
+            service_id, direction_id = day_type[column]
+            value = service[column]
+            
+            if isinstance(value, int):
+                value = float(value)
+            elif isinstance(value, float):
+                pass
+            elif isinstance(value, str):
+                value = value.replace(',', '.')
+                try:
+                    value = float(value)
+                except:
+                    value = 0
+            else:
+                value = 0
+
+            trip_filter = (trips['trip_short_name'] == service['Serviço'])
+            service_filter = (trips['service_id'] == service_id)
+            direction_filter = (trips['direction_id'] == direction_id)
+            total = len(trips[trip_filter & service_filter & direction_filter])
+
+            if not (value == 0 or (total > 0 and value > 0)):
+                errors.append({'Serviço': service['Serviço'], 'service_id': service_id, 'direction_id': direction_id})
+    return errors
+
+
 def check_os_filename(os_file):
     pattern = re.compile(r'^os_\d{4}-\d{2}-\d{2}.xlsx$')
     return bool(pattern.match(os_file.name))
 
 
 def check_os_columns(os_df):
-    cols = sorted(list(os_df.columns))
-    return bool(cols == sorted(os_columns))
+    set_os_columns = set(os_columns)
+    set_os_df_columns = set(os_df.columns)
+    return set_os_columns.issubset(set_os_df_columns)
 
+def reorder_columns(os_df):
+    os_df = os_df[os_columns]
+    return os_df
 
-def check_os_columns_order(os_df):
-    cols = list(os_df.columns)
-    return bool(cols == os_columns)
+def check_duplicates(os_df: pd.DataFrame) -> pd.DataFrame:
+    return os_df[os_df.duplicated(['Serviço'],keep=False)]
 
 
 def check_gtfs_filename(gtfs_file):
@@ -340,6 +399,7 @@ def main():
                 .str.strip()
                 .str.replace("—", "0")
                 .str.replace(",", ".")
+                .str.replace(".", "")
                 .astype(float)
                 .fillna(0)
                 
@@ -348,11 +408,24 @@ def main():
 
         st.success(
             ":white_check_mark: O arquivo OS contém as colunas esperadas!")
+        os_df = reorder_columns(os_df)
 
-        if not check_os_columns_order(os_df):
+        duplicates = check_duplicates(os_df)
+
+        if not duplicates.empty:
             st.warning(
-                f":warning: O arquivo OS contém as colunas esperadas, porém não segue a ordem esperada: {os_columns}")
+                ":warning: O arquivo OS contém as seguintes colunas duplicadas:")
+            st.table(duplicates)
+            return
+        
+        trips_df = get_df_from_zip(gtfs_file.getvalue(), 'trips.txt')
+        errors = check_gtfs_trip_absence(os_df, trips_df)
 
+        if errors:
+            error_msg = '\n'.join(map(lambda x : f'Serviço: {x["Serviço"]} | service_id: {x["service_id"]} | direction_id: {x["direction_id"]}\n', errors))
+            st.warning(
+                f":warning: O arquivo OS contém as seguintes colunas duplicadas:\n\n{error_msg}")
+            
         # Check dates
         st.subheader("Confirme por favor os itens abaixo:")
 
@@ -391,12 +464,7 @@ def main():
             trips_agg = get_trips(gtfs_file.getvalue())
             quadro = get_board(os_df)
             quadro_merged = quadro.merge(trips_agg, on='servico', how='left')
-            if len(quadro_merged[(quadro_merged["trip_id_ida"].isna()) & (quadro_merged["trip_id_volta"].isna())]) > 0:
-                st.warning(
-                    ":warning: ATENÇÃO: Existem trip_ids nulas"
-                )
-                st.table(quadro_merged[(quadro_merged["trip_id_ida"].isna()) & (quadro_merged["trip_id_volta"].isna())])
-                return
+            print(quadro_merged)
             if len(quadro_merged[((quadro_merged["partidas_ida_du"] > 0) & (quadro_merged["trip_id_ida"].isna())) | 
               ((quadro_merged["partidas_volta_du"] > 0) & (quadro_merged["trip_id_volta"].isna()))].sort_values('servico')) > 0:
                 st.warning(
