@@ -35,8 +35,6 @@ os_columns = [
     "Consórcio",
     "Extensão de Ida",
     "Extensão de Volta",
-    "Horário Inicial Dia Útil",
-    "Horário Fim Dia Útil",
     "Partidas Ida Dia Útil",
     "Partidas Volta Dia Útil",
     "Viagens Dia Útil",
@@ -52,8 +50,99 @@ os_columns = [
     "Partidas Ida Ponto Facultativo",
     "Partidas Volta Ponto Facultativo",
     "Viagens Ponto Facultativo",
-    "Quilometragem Ponto Facultativo"
+    "Quilometragem Ponto Facultativo",
+    'Horário Inicial Dia Útil',
+    'Horário Fim Dia Útil',
+    'Horário Inicial Sábado',
+    'Horário Fim Sábado',
+    'Horário Inicial Domingo',
+    'Horário Fim Domingo'
 ]
+
+def get_null_km_total(os_df: pd.DataFrame) -> pd.DataFrame:
+    trips = {
+        'du': {'going_trips_qty': 'Partidas Ida Dia Útil', 'returning_trips_qty': 'Partidas Volta Dia Útil', 'total_km': 'Quilometragem Dia Útil', 'total_km_calc': 'Quilometragem calculada DU'},
+        'saturday': {'going_trips_qty': 'Partidas Ida Sábado', 'returning_trips_qty': 'Partidas Volta Sábado', 'total_km': 'Quilometragem Sábado', 'total_km_calc': 'Quilometragem calculada Sábado'},
+        'sunday': {'going_trips_qty': 'Partidas Ida Domingo', 'returning_trips_qty': 'Partidas Volta Domingo', 'total_km': 'Quilometragem Domingo', 'total_km_calc': 'Quilometragem calculada Domingo'},
+    }
+    filters = []
+    
+    for day in trips:
+        trip = trips[day]
+        going_trips_qty = trip['going_trips_qty']
+        total_km = trip['total_km']
+        returning_trips_qty = trip['returning_trips_qty']
+        filter1 = (os_df[going_trips_qty] != 0) & ((os_df['Extensão de Ida'] == 0) | (os_df[total_km] == 0))
+        filter2 = (os_df[returning_trips_qty] != 0) & ((os_df['Extensão de Volta'] == 0) | (os_df[total_km] == 0))
+        filters.append((filter1 | filter2))
+
+    columns = ['Serviço', 'Vista', 'Consórcio', 'Extensão de Ida', 'Extensão de Volta',
+                "Partidas Ida Dia Útil", "Partidas Volta Dia Útil",
+                "Partidas Ida Sábado", "Partidas Volta Sábado",
+                "Partidas Ida Domingo", "Partidas Volta Domingo",
+                'Quilometragem Dia Útil', 
+                'Quilometragem Sábado', 
+                'Quilometragem Domingo', ]
+    return os_df[filters[0] | filters[1] | filters[2]][columns]
+
+def get_run_distance(os_df: pd.DataFrame) -> pd.DataFrame:
+    trips = {
+        'du': {'going_trips_qty': 'Partidas Ida Dia Útil', 'returning_trips_qty': 'Partidas Volta Dia Útil', 'total_km': 'Quilometragem Dia Útil', 'total_km_calc': 'Quilometragem calculada DU'},
+        'saturday': {'going_trips_qty': 'Partidas Ida Sábado', 'returning_trips_qty': 'Partidas Volta Sábado', 'total_km': 'Quilometragem Sábado', 'total_km_calc': 'Quilometragem calculada Sábado'},
+        'sunday': {'going_trips_qty': 'Partidas Ida Domingo', 'returning_trips_qty': 'Partidas Volta Domingo', 'total_km': 'Quilometragem Domingo', 'total_km_calc': 'Quilometragem calculada Domingo'},
+    }
+    filters = []
+    os_copy = os_df.copy()
+    
+    for day in trips:
+        trip = trips[day]
+
+        going_trips_qty = trip['going_trips_qty']
+        returning_trips_qty = trip['returning_trips_qty']
+        total_km_calc = trip['total_km_calc']
+        total_km = trip['total_km']
+
+        going_run = os_df['Extensão de Ida'] * os_df[going_trips_qty].astype(int)
+        returning_run = os_df['Extensão de Volta'] * os_df[returning_trips_qty].astype(int)
+
+        total_length = ((going_run + returning_run)/1000).round(2)
+
+        os_copy[total_km_calc] = total_length
+        filters.append((os_copy[total_km] != os_copy[total_km_calc]))
+    
+    columns = ['Serviço', 'Vista', 'Consórcio', 'Extensão de Ida', 'Extensão de Volta',
+                "Partidas Ida Dia Útil", "Partidas Volta Dia Útil",
+                "Partidas Ida Sábado", "Partidas Volta Sábado",
+                "Partidas Ida Domingo", "Partidas Volta Domingo",
+                'Quilometragem Dia Útil', 'Quilometragem calculada DU',
+                'Quilometragem Sábado', 'Quilometragem calculada Sábado',
+                'Quilometragem Domingo', 'Quilometragem calculada Domingo']
+    return os_copy[filters[0] | filters[1] | filters[2]][columns]
+
+
+def get_clock_problems(os_df: pd.DataFrame) -> pd.DataFrame:
+    trips = {
+        'du': {'start': 'Horário Inicial Dia Útil', 'end': 'Horário Fim Dia Útil'},
+        'saturday': {'start': 'Horário Inicial Sábado', 'end': 'Horário Fim Sábado'},
+        'sunday': {'start': 'Horário Inicial Domingo', 'end': 'Horário Fim Domingo'},
+    }
+    filters = []
+
+    for day in trips:
+        trip = trips[day]
+        start = trip['start']
+        end = trip['end']
+        filter = (os_df[start] > os_df[end])
+        filters.append(filter)
+    
+    columns = ['Serviço', 'Vista', 'Consórcio',
+               'Horário Inicial Dia Útil', 'Horário Fim Dia Útil',
+               'Horário Inicial Sábado', 'Horário Fim Sábado',
+                'Horário Inicial Domingo', 'Horário Fim Domingo'
+               ]
+    
+    return os_df[filters[0] | filters[1] | filters[2]][columns]
+
 
 def read_stream(stream: bytes) -> pd.DataFrame:
     file_text = str(stream,'utf-8')    
@@ -303,8 +392,7 @@ def check_os_columns(os_df):
     return set_os_columns.issubset(set_os_df_columns)
 
 def reorder_columns(os_df):
-    os_df = os_df[os_columns]
-    return os_df
+    return os_df[os_columns]
 
 def check_duplicates(os_df: pd.DataFrame) -> pd.DataFrame:
     return os_df[os_df.duplicated(['Serviço'],keep=False)]
@@ -383,7 +471,11 @@ def main():
             os_df = os_sheets[actual_sheet]
 
         viagens_cols = ["Viagens Dia Útil", "Viagens Sábado",
-                        "Viagens Domingo", "Viagens Ponto Facultativo"]
+                        "Viagens Domingo", "Viagens Ponto Facultativo",
+                        "Partidas Ida Dia Útil", "Partidas Volta Dia Útil",
+                        "Partidas Ida Sábado", "Partidas Volta Sábado",
+                        "Partidas Ida Domingo", "Partidas Volta Domingo"
+                        ]
         km_cols = ["Quilometragem Dia Útil", "Quilometragem Sábado",
                     "Quilometragem Domingo", "Quilometragem Ponto Facultativo"]
 
@@ -398,20 +490,41 @@ def main():
                 os_df[col].astype(str)
                 .str.strip()
                 .str.replace("—", "0")
-                .str.replace(",", ".")
                 .str.replace(".", "")
+                .str.replace(",", ".")
                 .astype(float)
                 .fillna(0)
                 
             )
             os_df[col] = os_df[col].astype(float)
 
+        time_cols = [
+                    'Horário Inicial Dia Útil', 'Horário Fim Dia Útil',
+                    'Horário Inicial Sábado', 'Horário Fim Sábado',
+                    'Horário Inicial Domingo', 'Horário Fim Domingo'
+                     ]
+        for col in time_cols:
+            os_df[col] = pd.to_datetime(os_df[col], format='%H:%M:%S', errors='coerce')
+        
         st.success(
             ":white_check_mark: O arquivo OS contém as colunas esperadas!")
         os_df = reorder_columns(os_df)
 
+        clock_problems = get_clock_problems(os_df)        
+        if not clock_problems.empty:
+            st.warning(
+                ":warning: Horário inicial menor que horário final nas seguintes linhas:")
+            st.dataframe(clock_problems)
+            return
+        
+        null_km_total = get_null_km_total(os_df)
+        if not null_km_total.empty:
+            st.warning(
+                ":warning: Serviço/sentido com viagens mas sem extensão ou quilometragem nas seguintes linhas:")
+            st.dataframe(null_km_total)
+            return
+        
         duplicates = check_duplicates(os_df)
-
         if not duplicates.empty:
             st.warning(
                 ":warning: O arquivo OS contém as seguintes colunas duplicadas:")
@@ -424,8 +537,17 @@ def main():
         if errors:
             error_msg = '\n'.join(map(lambda x : f'Serviço: {x["Serviço"]} | service_id: {x["service_id"]} | direction_id: {x["direction_id"]}\n', errors))
             st.warning(
-                f":warning: O arquivo OS contém as seguintes colunas duplicadas:\n\n{error_msg}")
-            
+                f":warning: Serviços/sentidos sem trip no GTFS:\n\n{error_msg}")
+            return
+        
+
+        run_distance = get_run_distance(os_df)
+        if not run_distance.empty:
+            st.warning(
+                ":warning: As seguintes linhas têm quilometragem diferente de extensão x viagens:")
+            st.dataframe(run_distance)
+            return
+        
         # Check dates
         st.subheader("Confirme por favor os itens abaixo:")
 
@@ -464,7 +586,7 @@ def main():
             trips_agg = get_trips(gtfs_file.getvalue())
             quadro = get_board(os_df)
             quadro_merged = quadro.merge(trips_agg, on='servico', how='left')
-            print(quadro_merged)
+
             if len(quadro_merged[((quadro_merged["partidas_ida_du"] > 0) & (quadro_merged["trip_id_ida"].isna())) | 
               ((quadro_merged["partidas_volta_du"] > 0) & (quadro_merged["trip_id_volta"].isna()))].sort_values('servico')) > 0:
                 st.warning(
