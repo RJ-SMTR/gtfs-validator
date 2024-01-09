@@ -378,7 +378,7 @@ def check_gtfs_trip_absence(os_df: pd.DataFrame, trips: pd.DataFrame) -> list[di
 
             if not (value == 0 or (total > 0 and value > 0)):
                 errors.append({'Serviço': service['Serviço'], 'service_id': service_id, 'direction_id': direction_id})
-    return errors
+    return pd.DataFrame(errors)
 
 
 def check_os_filename(os_file):
@@ -515,38 +515,40 @@ def main():
             st.warning(
                 ":warning: Horário inicial menor que horário final nas seguintes linhas:")
             st.dataframe(clock_problems)
-            return
+            # return
         
         null_km_total = get_null_km_total(os_df)
         if not null_km_total.empty:
             st.warning(
                 ":warning: Serviço/sentido com viagens mas sem extensão ou quilometragem nas seguintes linhas:")
             st.dataframe(null_km_total)
-            return
+            # return
         
         duplicates = check_duplicates(os_df)
         if not duplicates.empty:
             st.warning(
                 ":warning: O arquivo OS contém as seguintes colunas duplicadas:")
             st.table(duplicates)
-            return
+            # return
         
         trips_df = get_df_from_zip(gtfs_file.getvalue(), 'trips.txt')
         errors = check_gtfs_trip_absence(os_df, trips_df)
 
-        if errors:
-            error_msg = '\n'.join(map(lambda x : f'Serviço: {x["Serviço"]} | service_id: {x["service_id"]} | direction_id: {x["direction_id"]}\n', errors))
+        if not errors.empty:
+            # error_msg = '\n'.join(map(lambda x : f'Serviço: {x["Serviço"]} | service_id: {x["service_id"]} | direction_id: {x["direction_id"]}\n', errors))
             st.warning(
-                f":warning: Serviços/sentidos sem trip no GTFS:\n\n{error_msg}")
-            return
+                f":warning: Serviços/sentidos sem trip no GTFS:")
+            st.dataframe(errors)
+            # return
         
 
         run_distance = get_run_distance(os_df)
         if not run_distance.empty:
             st.warning(
                 ":warning: As seguintes linhas têm quilometragem diferente de extensão x viagens:")
-            st.dataframe(run_distance)
-            return
+            func = lambda x: f'{float(x):,.2f}' if isinstance(x, int) else f'{x:,.2f}' if isinstance(x, float) else x
+            st.dataframe(run_distance.style.format(func, thousands='.', decimal=','))
+            # return
         
         # Check dates
         st.subheader("Confirme por favor os itens abaixo:")
@@ -626,25 +628,25 @@ def main():
             tb.loc["Total"] = tb.sum()
             st.table(tb.style.format("{:.3f}"))
 
-            if st.button('Enviar', type="primary"):
-                now = datetime.now(pytz.timezone('America/Sao_Paulo'))
-                today_str = now.strftime('%Y-%m-%d')
-                now_str = now.isoformat()
+            # if st.button('Enviar', type="primary"):
+            #     now = datetime.now(pytz.timezone('America/Sao_Paulo'))
+            #     today_str = now.strftime('%Y-%m-%d')
+            #     now_str = now.isoformat()
 
-                # Gera um .csv direto na memoria
-                string_buffer = StringIO() 
-                os_df.to_csv(string_buffer, index=False, sep=',')
-                string_buffer = bytes(string_buffer.getvalue(), encoding='utf8')
-                os_filename = f'data={today_str}/os-{st.session_state["username"]}-{now_str}.csv'
-                stringio_os = BytesIO(string_buffer)
-                upload_to_gcs(os_filename, stringio_os)
+            #     # Gera um .csv direto na memoria
+            #     string_buffer = StringIO() 
+            #     os_df.to_csv(string_buffer, index=False, sep=',')
+            #     string_buffer = bytes(string_buffer.getvalue(), encoding='utf8')
+            #     os_filename = f'data={today_str}/os-{st.session_state["username"]}-{now_str}.csv'
+            #     stringio_os = BytesIO(string_buffer)
+            #     upload_to_gcs(os_filename, stringio_os)
 
-                gtfs_filename = f'data={today_str}/gtfs-{st.session_state["username"]}-{now_str}.zip'
-                stringio_gtfs = change_feed_info_dates(gtfs_file.getvalue(), os_initial_date, os_final_date)
-                stringio_gtfs = BytesIO(stringio_gtfs.getvalue())
-                upload_to_gcs(gtfs_filename, stringio_gtfs)
+            #     gtfs_filename = f'data={today_str}/gtfs-{st.session_state["username"]}-{now_str}.zip'
+            #     stringio_gtfs = change_feed_info_dates(gtfs_file.getvalue(), os_initial_date, os_final_date)
+            #     stringio_gtfs = BytesIO(stringio_gtfs.getvalue())
+            #     upload_to_gcs(gtfs_filename, stringio_gtfs)
 
-                st.write('Enviado')
+            #     st.write('Enviado')
 
 if __name__ == "__main__":
     authenticator.login('Login', 'main')
