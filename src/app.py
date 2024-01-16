@@ -7,7 +7,7 @@ import os
 import pytz
 import streamlit_authenticator as stauth
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from io import BytesIO, StringIO
 from google.cloud import storage
 from google.oauth2 import service_account
@@ -108,7 +108,7 @@ def get_run_distance(os_df: pd.DataFrame) -> pd.DataFrame:
         total_length = ((going_run + returning_run)/1000).round(2)
 
         os_copy[total_km_calc] = total_length
-        filters.append((os_copy[total_km] != os_copy[total_km_calc]))
+        filters.append((abs(os_copy[total_km] - os_copy[total_km_calc] > 0.01)))
     
     columns = ['Serviço', 'Vista', 'Consórcio', 'Extensão de Ida', 'Extensão de Volta',
                 "Partidas Ida Dia Útil", "Partidas Volta Dia Útil",
@@ -193,6 +193,16 @@ def get_shapes(shapes: pd.DataFrame) -> pd.DataFrame:
         shapes_final = pd.concat([shapes_final, aux])
     return shapes_final
 
+def cast_to_timedelta(entry: object) -> timedelta:
+    if isinstance(entry, datetime):
+        hours = entry.day * 24 + entry.hour
+        minutes = entry.minute
+        seconds = entry.second
+        return timedelta(hours=hours, minutes=minutes, seconds=seconds)
+    elif isinstance(entry, time):
+        return timedelta(hours=entry.hour, minutes=entry.minute, seconds=entry.second)
+   
+    return timedelta(seconds=0)
 
 def get_df_from_zip(file: bytes, filename: str) -> pd.DataFrame:
     # Descompacta o arquivo zip direto na memoria
@@ -335,12 +345,14 @@ def check_os_filetype(os_file):
 
 def check_gtfs_trip_absence(os_df: pd.DataFrame, trips: pd.DataFrame) -> list[dict]:
     day_type = {
-        "Partidas Ida Dia Útil": ('U_REG', 0),
-        "Partidas Volta Dia Útil": ('U_REG', 1),
-        "Partidas Ida Sábado": ('S_REG', 0),
-        "Partidas Volta Sábado": ('S_REG', 1),
-        "Partidas Ida Domingo": ('D_REG', 0),
-        "Partidas Volta Domingo": ('D_REG', 1)
+        "Partidas Ida Dia Útil": ('U_', 0),
+        "Partidas Volta Dia Útil": ('U_', 1),
+        "Partidas Ida Sábado": ('S_', 0),
+        "Partidas Volta Sábado": ('S_', 1),
+        "Partidas Ida Domingo": ('D_', 0),
+        "Partidas Volta Domingo": ('D_', 1),
+        # "Partidas Ida Domingo": ('D_REG', 0), TODO: transformar em U_OBRA, S_OBRA, D_OBRA, 
+        # "Partidas Volta Domingo": ('D_REG', 1)
     }
     os_df = os_df[['Serviço', "Partidas Ida Dia Útil",
     "Partidas Volta Dia Útil",
@@ -371,13 +383,18 @@ def check_gtfs_trip_absence(os_df: pd.DataFrame, trips: pd.DataFrame) -> list[di
             else:
                 value = 0
 
-            trip_filter = (trips['trip_short_name'] == service['Serviço'])
-            service_filter = (trips['service_id'] == service_id)
+            try:
+                trip_short_name = f'{int(service["Serviço"]):03d}'
+            except:
+                trip_short_name = service['Serviço']
+            
+            trip_filter = (trips['trip_short_name'] == trip_short_name)
+            service_filter = (trips['service_id'].str.startswith(service_id))
             direction_filter = (trips['direction_id'] == direction_id)
             total = len(trips[trip_filter & service_filter & direction_filter])
 
             if not (value == 0 or (total > 0 and value > 0)):
-                errors.append({'Serviço': service['Serviço'], 'service_id': service_id, 'direction_id': direction_id})
+                errors.append({'Serviço': trip_short_name, 'service_id': service_id, 'direction_id': direction_id})
     return pd.DataFrame(errors)
 
 
@@ -442,6 +459,109 @@ def upload_to_gcs(file_name: str, file_data: BytesIO) -> None:
     blob = bucket.blob(file_name)
     blob.upload_from_file(file_data)
 
+def get_weekdays(calendar, service_id):
+        row = calendar[calendar['service_id'] == service_id].iloc[0]
+        active_days = []
+        if row['monday'] == 1:
+            active_days.append(0)
+        if row['tuesday'] == 1:
+            active_days.append(1)
+        if row['wednesday'] == 1:
+            active_days.append(2)
+        if row['thursday'] == 1:
+            active_days.append(3)
+        if row['friday'] == 1:
+            active_days.append(4)
+        if row['saturday'] == 1:
+            active_days.append(5)
+        if row['sunday'] == 1:
+            active_days.append(6)
+
+        return set(active_days)
+
+
+def check_conflicting_service_ids(trips: pd.DataFrame, calendar: pd.DataFrame, calendar_dates: pd.DataFrame):   
+
+    start_date = pd.to_datetime(calendar['start_date'].astype(str), format="%Y%m%d")
+    calendar['start_date'] = start_date
+
+    end_date = pd.to_datetime(calendar['end_date'].astype(str), format="%Y%m%d")
+    calendar['end_date'] = end_date
+
+    calendar_dates['date'] = pd.to_datetime(calendar_dates['date'].astype(str), format="%Y%m%d")
+
+    start = min(start_date)
+    end = max(end_date)
+
+    period = pd.date_range(start=start, end=end)
+
+    new_calendar = pd.DataFrame()
+    new_calendar['period'] = period
+    new_calendar['service'] = ''
+
+    for _, row in calendar.iterrows():
+        active_days = []
+        if row['monday'] == 1:
+            active_days.append(0)
+        if row['tuesday'] == 1:
+            active_days.append(1)
+        if row['wednesday'] == 1:
+            active_days.append(2)
+        if row['thursday'] == 1:
+            active_days.append(3)
+        if row['friday'] == 1:
+            active_days.append(4)
+        if row['saturday'] == 1:
+            active_days.append(5)
+        if row['sunday'] == 1:
+            active_days.append(6)
+        
+        new_calendar.loc[(new_calendar['period'] >= row['start_date']) & (new_calendar['period'] <= row['end_date']) & (new_calendar['period'].dt.dayofweek.isin(active_days)), 'service'] += row['service_id'] + ','
+
+    for _, row in calendar_dates.iterrows():
+        if row['exception_type'] == 1:
+            new_calendar.loc[(new_calendar['period'] == row['date']), 'service'] += row['service_id'] + ','
+        elif row['exception_type'] == 2:
+            
+            services = set(new_calendar.loc[(new_calendar['period'] == row['date']), 'service'].iloc[0].split(','))
+
+            if row['service_id'] in services:
+                services.remove('')
+                services.remove(row['service_id'])            
+                new_calendar.loc[(new_calendar['period'] == row['date']), 'service'] = ','.join(services) + ','
+
+    nc_uniq = new_calendar['service'].unique()
+    trip_short_names = trips['trip_short_name'].unique()
+
+    errors = []
+    for trip_short_name in trip_short_names:        
+        going = trips[(trips['trip_short_name'] == trip_short_name) & (trips['direction_id'] == 0)]['service_id'].unique()        
+        returning = trips[(trips['trip_short_name'] == trip_short_name) & (trips['direction_id'] == 0)]['service_id'].unique()
+        
+        for data in nc_uniq:             
+            going_dict = {}
+            returning_dict = {}
+            
+            for item in going:            
+                if item in data:
+                    going_dict[item] = get_weekdays(calendar, item)
+                    
+            for item in returning:
+                if item in data:
+                    returning_dict[item] = get_weekdays(calendar, item)
+
+            for item1 in going_dict:
+                for item2 in going_dict:
+                    if item1 != item2 and going_dict[item1].intersection(going_dict[item2]):
+                        errors.append((trip_short_name, 0, item1, item2))
+            
+            for item1 in returning_dict:
+                for item2 in returning_dict:
+                    if item1 != item2 and returning_dict[item1].intersection(returning_dict[item2]):
+                        errors.append((trip_short_name, 1, item1, item2))
+
+    return errors
+
 def main():
     st.title(":pencil: Validação GTFS e OS")
     st.caption("Envie ambos os arquivos para iniciar o processo de validação. Ao final, se tudo estiver correto, você pode confirmar para subir os dados no data lake!")
@@ -483,29 +603,51 @@ def main():
         if not check_os_columns(os_df):
             st.warning(
                 ":warning: O arquivo OS não contém as colunas esperadas!")
+            set_os_columns = set(os_columns)
+            set_os_df_columns = set(os_df.columns)
+            set_os_columns.difference(set_os_df_columns)
+            st.warning(set_os_columns.difference(set_os_df_columns))
             return
 
         for col in viagens_cols + km_cols:
-            os_df[col] = (
-                os_df[col].astype(str)
-                .str.strip()
-                .str.replace("—", "0")
-                .str.replace(".", "")
-                .str.replace(",", ".")
-                .astype(float)
-                .fillna(0)
-                
-            )
+            for i, row in os_df.iterrows():
+                if isinstance(row[col], float):
+                    pass
+                elif isinstance(row[col], int):
+                    os_df.loc[i, col] = float(row[col])
+                elif isinstance(row[col], str):
+                    value = row[col]
+                    try:
+                        value = float(value.replace('.', '').replace(',', '.'))
+                    except:
+                        value = 0.0
+                    os_df.loc[i, col] = value
+                else:
+                    os_df.loc[i, col] = 0.0
             os_df[col] = os_df[col].astype(float)
 
+            # os_df[col] = (
+            #     os_df[col].astype(str)
+            #     .str.strip()
+            #     .str.replace("—", "0")
+            #     .str.replace(".", "")
+            #     .str.replace(",", ".")
+            #     .astype(float)
+            #     .fillna(0)
+                
+            # )
+            
+        
         time_cols = [
                     'Horário Inicial Dia Útil', 'Horário Fim Dia Útil',
                     'Horário Inicial Sábado', 'Horário Fim Sábado',
                     'Horário Inicial Domingo', 'Horário Fim Domingo'
                      ]
-        for col in time_cols:
-            os_df[col] = pd.to_datetime(os_df[col], format='%H:%M:%S', errors='coerce')
         
+        for col in time_cols:
+            os_df[col] = pd.to_timedelta(os_df[col].apply(cast_to_timedelta))
+        # st.dataframe(os_df.style.format(func, thousands='.', decimal=','))
+
         st.success(
             ":white_check_mark: O arquivo OS contém as colunas esperadas!")
         os_df = reorder_columns(os_df)
@@ -532,6 +674,8 @@ def main():
             # return
         
         trips_df = get_df_from_zip(gtfs_file.getvalue(), 'trips.txt')
+        calendar_df = get_df_from_zip(gtfs_file.getvalue(), 'calendar.txt')
+        calendar_dates_df = get_df_from_zip(gtfs_file.getvalue(), 'calendar_dates.txt')
         errors = check_gtfs_trip_absence(os_df, trips_df)
 
         if not errors.empty:
@@ -541,6 +685,12 @@ def main():
             st.dataframe(errors)
             # return
         
+        conflicting_services = check_conflicting_service_ids(trips_df, calendar_df, calendar_dates_df)
+        print('conflicting_services', conflicting_services)
+        if conflicting_services:
+            st.warning(
+                f":warning: Serviços conflitantes:")
+            st.warning(str(conflicting_services))
 
         run_distance = get_run_distance(os_df)
         if not run_distance.empty:
@@ -649,6 +799,7 @@ def main():
             #     st.write('Enviado')
 
 if __name__ == "__main__":
+
     authenticator.login('Login', 'main')
     if st.session_state["authentication_status"]:
         authenticator.logout('Logout', 'main', key='unique_key')
