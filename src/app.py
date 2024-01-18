@@ -6,6 +6,7 @@ import pandas as pd
 import os
 import pytz
 import streamlit_authenticator as stauth
+import re
 
 from datetime import datetime, timedelta, time
 from io import BytesIO, StringIO
@@ -108,7 +109,7 @@ def get_run_distance(os_df: pd.DataFrame) -> pd.DataFrame:
         total_length = ((going_run + returning_run)/1000).round(2)
 
         os_copy[total_km_calc] = total_length
-        filters.append((abs(os_copy[total_km] - os_copy[total_km_calc] > 0.01)))
+        filters.append((abs(os_copy[total_km] - os_copy[total_km_calc]) >= 0.02))
     
     columns = ['Serviço', 'Vista', 'Consórcio', 'Extensão de Ida', 'Extensão de Volta',
                 "Partidas Ida Dia Útil", "Partidas Volta Dia Útil",
@@ -134,14 +135,20 @@ def get_clock_problems(os_df: pd.DataFrame) -> pd.DataFrame:
         end = trip['end']
         filter = (os_df[start] > os_df[end])
         filters.append(filter)
-    
+
     columns = ['Serviço', 'Vista', 'Consórcio',
                'Horário Inicial Dia Útil', 'Horário Fim Dia Útil',
                'Horário Inicial Sábado', 'Horário Fim Sábado',
                 'Horário Inicial Domingo', 'Horário Fim Domingo'
                ]
-    
-    return os_df[filters[0] | filters[1] | filters[2]][columns]
+    problems = os_df[filters[0] | filters[1] | filters[2]][columns]
+    time_columns = ['Horário Inicial Dia Útil', 'Horário Fim Dia Útil',
+               'Horário Inicial Sábado', 'Horário Fim Sábado',
+                'Horário Inicial Domingo', 'Horário Fim Domingo'
+               ]
+    for column in time_columns:
+        problems[column] = problems[column].astype(str)
+    return problems
 
 
 def read_stream(stream: bytes) -> pd.DataFrame:
@@ -194,6 +201,7 @@ def get_shapes(shapes: pd.DataFrame) -> pd.DataFrame:
     return shapes_final
 
 def cast_to_timedelta(entry: object) -> timedelta:
+    
     if isinstance(entry, datetime):
         hours = entry.day * 24 + entry.hour
         minutes = entry.minute
@@ -201,7 +209,12 @@ def cast_to_timedelta(entry: object) -> timedelta:
         return timedelta(hours=hours, minutes=minutes, seconds=seconds)
     elif isinstance(entry, time):
         return timedelta(hours=entry.hour, minutes=entry.minute, seconds=entry.second)
-   
+    elif isinstance(entry, str):
+        
+        regexp = re.compile("([0-9][0-9]:[0-5][0-9]:[0-5][0-9])")
+        if regexp.match(entry):
+            hour, minute, second = entry.replace(' ', '').split(':')
+            return timedelta(hours=int(hour), minutes=int(minute), seconds=int(second))
     return timedelta(seconds=0)
 
 def get_df_from_zip(file: bytes, filename: str) -> pd.DataFrame:
@@ -412,7 +425,11 @@ def reorder_columns(os_df):
     return os_df[os_columns]
 
 def check_duplicates(os_df: pd.DataFrame) -> pd.DataFrame:
-    return os_df[os_df.duplicated(['Serviço'],keep=False)]
+    copy = os_df.copy()
+    for column in copy.columns:
+        if 'Horário' in column:
+            copy[column] = copy[column].astype(str)
+    return copy[copy.duplicated(['Serviço'],keep=False)]
 
 
 def check_gtfs_filename(gtfs_file):
@@ -537,7 +554,9 @@ def check_conflicting_service_ids(trips: pd.DataFrame, calendar: pd.DataFrame, c
     for trip_short_name in trip_short_names:        
         going = trips[(trips['trip_short_name'] == trip_short_name) & (trips['direction_id'] == 0)]['service_id'].unique()        
         returning = trips[(trips['trip_short_name'] == trip_short_name) & (trips['direction_id'] == 0)]['service_id'].unique()
-        
+        if trip_short_name == 'ABCDE':
+            print(going)
+            print(returning)
         for data in nc_uniq:             
             going_dict = {}
             returning_dict = {}
@@ -553,14 +572,14 @@ def check_conflicting_service_ids(trips: pd.DataFrame, calendar: pd.DataFrame, c
             for item1 in going_dict:
                 for item2 in going_dict:
                     if item1 != item2 and going_dict[item1].intersection(going_dict[item2]):
-                        errors.append((trip_short_name, 0, item1, item2))
+                        errors.append({'trip_short_name': trip_short_name, 'direction': 0, 'service_id1': item1, 'service_id2':item2})
             
             for item1 in returning_dict:
                 for item2 in returning_dict:
                     if item1 != item2 and returning_dict[item1].intersection(returning_dict[item2]):
-                        errors.append((trip_short_name, 1, item1, item2))
+                        errors.append({'trip_short_name': trip_short_name, 'direction': 1, 'service_id1': item1, 'service_id2':item2})
 
-    return errors
+    return pd.DataFrame(errors)
 
 def main():
     st.title(":pencil: Validação GTFS e OS")
@@ -594,7 +613,8 @@ def main():
                         "Viagens Domingo", "Viagens Ponto Facultativo",
                         "Partidas Ida Dia Útil", "Partidas Volta Dia Útil",
                         "Partidas Ida Sábado", "Partidas Volta Sábado",
-                        "Partidas Ida Domingo", "Partidas Volta Domingo"
+                        "Partidas Ida Domingo", "Partidas Volta Domingo",
+                        "Extensão de Ida", "Extensão de Volta"
                         ]
         km_cols = ["Quilometragem Dia Útil", "Quilometragem Sábado",
                     "Quilometragem Domingo", "Quilometragem Ponto Facultativo"]
@@ -612,7 +632,8 @@ def main():
         for col in viagens_cols + km_cols:
             for i, row in os_df.iterrows():
                 if isinstance(row[col], float):
-                    pass
+                    if pd.isna(row[col]):
+                        os_df.loc[i, col] = 0.0
                 elif isinstance(row[col], int):
                     os_df.loc[i, col] = float(row[col])
                 elif isinstance(row[col], str):
@@ -621,11 +642,11 @@ def main():
                         value = float(value.replace('.', '').replace(',', '.'))
                     except:
                         value = 0.0
+                        
                     os_df.loc[i, col] = value
                 else:
                     os_df.loc[i, col] = 0.0
             os_df[col] = os_df[col].astype(float)
-
             # os_df[col] = (
             #     os_df[col].astype(str)
             #     .str.strip()
@@ -653,24 +674,25 @@ def main():
         os_df = reorder_columns(os_df)
 
         clock_problems = get_clock_problems(os_df)        
-        if not clock_problems.empty:
-            st.warning(
-                ":warning: Horário inicial menor que horário final nas seguintes linhas:")
-            st.dataframe(clock_problems)
+        # if not clock_problems.empty:
+        st.warning(
+            ":warning: Horário inicial menor que horário final nas seguintes linhas:")
+
+        st.dataframe(clock_problems)
             # return
         
         null_km_total = get_null_km_total(os_df)
-        if not null_km_total.empty:
-            st.warning(
-                ":warning: Serviço/sentido com viagens mas sem extensão ou quilometragem nas seguintes linhas:")
-            st.dataframe(null_km_total)
+        # if not null_km_total.empty:
+        st.warning(
+            ":warning: Serviço/sentido com viagens mas sem extensão ou quilometragem nas seguintes linhas:")
+        st.dataframe(null_km_total)
             # return
         
         duplicates = check_duplicates(os_df)
-        if not duplicates.empty:
-            st.warning(
-                ":warning: O arquivo OS contém as seguintes colunas duplicadas:")
-            st.table(duplicates)
+        # if not duplicates.empty:
+        st.warning(
+            ":warning: O arquivo OS contém as seguintes linhas duplicadas:")
+        st.table(duplicates)
             # return
         
         trips_df = get_df_from_zip(gtfs_file.getvalue(), 'trips.txt')
@@ -678,26 +700,26 @@ def main():
         calendar_dates_df = get_df_from_zip(gtfs_file.getvalue(), 'calendar_dates.txt')
         errors = check_gtfs_trip_absence(os_df, trips_df)
 
-        if not errors.empty:
+        # if not errors.empty:
             # error_msg = '\n'.join(map(lambda x : f'Serviço: {x["Serviço"]} | service_id: {x["service_id"]} | direction_id: {x["direction_id"]}\n', errors))
-            st.warning(
-                f":warning: Serviços/sentidos sem trip no GTFS:")
-            st.dataframe(errors)
+        st.warning(
+            f":warning: Serviços/sentidos sem trip no GTFS:")
+        st.dataframe(errors)
             # return
         
         conflicting_services = check_conflicting_service_ids(trips_df, calendar_df, calendar_dates_df)
-        print('conflicting_services', conflicting_services)
-        if conflicting_services:
-            st.warning(
-                f":warning: Serviços conflitantes:")
-            st.warning(str(conflicting_services))
-
+        # if conflicting_services:
+        st.warning(
+            f":warning: Serviços conflitantes:")
+        st.dataframe(conflicting_services)
+            # return
+        
         run_distance = get_run_distance(os_df)
-        if not run_distance.empty:
-            st.warning(
-                ":warning: As seguintes linhas têm quilometragem diferente de extensão x viagens:")
-            func = lambda x: f'{float(x):,.2f}' if isinstance(x, int) else f'{x:,.2f}' if isinstance(x, float) else x
-            st.dataframe(run_distance.style.format(func, thousands='.', decimal=','))
+        # if not run_distance.empty:
+        st.warning(
+            ":warning: As seguintes linhas têm quilometragem diferente de extensão x viagens:")
+        func = lambda x: f'{float(x):,.2f}' if isinstance(x, int) else f'{x:,.2f}' if isinstance(x, float) else x
+        st.dataframe(run_distance.style.format(func, thousands='.', decimal=','))
             # return
         
         # Check dates
@@ -740,20 +762,14 @@ def main():
             quadro_merged = quadro.merge(trips_agg, on='servico', how='left')
 
             if len(quadro_merged[((quadro_merged["partidas_ida_du"] > 0) & (quadro_merged["trip_id_ida"].isna())) | 
-              ((quadro_merged["partidas_volta_du"] > 0) & (quadro_merged["trip_id_volta"].isna()))].sort_values('servico')) > 0:
+            ((quadro_merged["partidas_volta_du"] > 0) & (quadro_merged["trip_id_volta"].isna()))].sort_values('servico')) > 0:
                 st.warning(
-                    ":warning: ATENÇÃO: Existem viagens com ida e volta que possuem trip_ids nulas"
+                    ":warning: ATENÇÃO: Existem viagens com ida e volta que não possuem trip_ids"
                 )
                 st.table(quadro_merged[((quadro_merged["partidas_ida_du"] > 0) & (quadro_merged["trip_id_ida"].isna())) | 
-              ((quadro_merged["partidas_volta_du"] > 0) & (quadro_merged["trip_id_volta"].isna()))].sort_values('servico'))
+                ((quadro_merged["partidas_volta_du"] > 0) & (quadro_merged["trip_id_volta"].isna()))].sort_values('servico'))
                 return
-            if len(quadro_merged[((quadro_merged["extensao_ida"] == 0) & ~(quadro_merged["trip_id_ida"].isna())) | 
-              ((quadro_merged["extensao_volta"] == 0) & ~(quadro_merged["trip_id_volta"].isna()))]) > 0:
-                st.warning(
-                    ":warning: ATENÇÃO: Existem viagens programadas sem extensão definida"
-                )
-                st.table(quadro_merged[((quadro_merged["extensao_ida"] == 0) & ~(quadro_merged["trip_id_ida"].isna())) | 
-              ((quadro_merged["extensao_volta"] == 0) & ~(quadro_merged["trip_id_volta"].isna()))])
+
             # Check data
             st.subheader(
                 ":face_with_monocle: Ótimo! Verifique os dados antes de subir:")
